@@ -1,5 +1,10 @@
-# Week 9 capstone — single-broker Apache Kafka in KRaft mode (no ZooKeeper).
-# Same broker as Week 8; here we give the ci.images topic 3 partitions.
+# Week 9 — single-broker Apache Kafka in KRaft mode (no ZooKeeper).
+#
+# Two listeners:
+#   PLAINTEXT (localhost:9092)   — clients on the host (the lab's producer.py /
+#                                  consumer_group.py, and kafka-console-* via docker exec)
+#   INTERNAL  (week9-kafka:29092) — other CONTAINERS on this Docker network
+#                                  (the capstone pipeline's agent connects here)
 #   docker compose -p week9 up -d
 #   docker compose -p week9 down
 services:
@@ -11,13 +16,14 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,INTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://week9-kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # we create ci.images explicitly with 3 partitions
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"

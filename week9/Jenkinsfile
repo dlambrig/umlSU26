@@ -1,16 +1,21 @@
 // Week 9 capstone (step 1) — the pipeline announces its build to Kafka.
-// This is JUST the send: after a successful build, publish one ImagePushed
-// event to the ci.images topic. Consuming/reacting to it comes in later weeks.
+// After a build, publish one ImagePushed event to the ci.images topic.
+// Consuming/reacting to it comes in later weeks.
 //
-// How the send works: the agent already has the Docker socket mounted (as in
-// earlier weeks), so the `sh` step pipes a message into the Kafka container's
-// own console-producer via `docker exec`. No Kafka client to install in the
-// agent, and no shared-network setup needed yet.
+// The stage runs on a small image that already has the Kafka client
+// (localhost:5001/kafka-python — built from the Dockerfile here and pushed to
+// your local registry), joined to the Kafka network so it can reach the broker
+// by name (week9-kafka:29092, the INTERNAL listener in docker-compose.yml).
 pipeline {
-    agent any
+    agent {
+        docker {
+            image 'localhost:5001/kafka-python:1'
+            args '--network week9_default'
+        }
+    }
     environment {
-        KAFKA = 'week9-kafka'   // name of the running Kafka container
-        TOPIC = 'ci.images'
+        BROKER = 'week9-kafka:29092'
+        TOPIC  = 'ci.images'
     }
     stages {
         stage('Build') {
@@ -20,13 +25,24 @@ pipeline {
         }
         stage('Announce to Kafka') {
             steps {
-                sh '''
-                    MSG="{\\"event\\":\\"ImagePushed\\",\\"image\\":\\"calculator\\",\\"tag\\":\\"${BUILD_NUMBER}\\",\\"branch\\":\\"${BRANCH_NAME}\\"}"
-                    echo "$MSG" | docker exec -i ${KAFKA} \\
-                        /opt/kafka/bin/kafka-console-producer.sh \\
-                        --topic ${TOPIC} --bootstrap-server localhost:9092
-                    echo "announced to Kafka: $MSG"
-                '''
+                sh '''python - <<'PY'
+import json, os
+from kafka import KafkaProducer
+
+producer = KafkaProducer(
+    bootstrap_servers=os.environ["BROKER"],
+    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+)
+event = {
+    "event": "ImagePushed",
+    "image": "calculator",
+    "tag": os.environ.get("BUILD_NUMBER", "0"),
+    "branch": os.environ.get("BRANCH_NAME", "main"),
+}
+producer.send(os.environ["TOPIC"], event).get(timeout=10)
+producer.flush()
+print("announced to Kafka:", event)
+PY'''
             }
         }
     }
