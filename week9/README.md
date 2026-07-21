@@ -79,9 +79,10 @@ docker build -t localhost:5001/kafka-python:1 .
 docker push  localhost:5001/kafka-python:1
 ```
 
-The pipeline runs on the Jenkins node (docker CLI + mounted socket); the announce
-step does `docker run --network week9_default localhost:5001/kafka-python:1 …` so
-it can reach the broker by name (`week9-kafka:29092`).
+Each stage declares its own agent: the **build & push** stage runs on the Jenkins
+node (docker CLI + mounted socket); the **announce** stage runs *inside* the
+kafka-python image (a per-stage docker agent) on the Kafka network, so it can
+reach the broker by name (`week9-kafka:29092`).
 
 **Why the broker has two listeners** (`docker-compose.yml`): it advertises
 `localhost:9092` for clients on the host (the lab) and `week9-kafka:29092` for
