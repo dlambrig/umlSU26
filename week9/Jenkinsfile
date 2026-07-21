@@ -1,48 +1,35 @@
-// Week 9 capstone (step 1) — the pipeline announces its build to Kafka.
-// After a build, publish one ImagePushed event to the ci.images topic.
-// Consuming/reacting to it comes in later weeks.
+// Week 9 capstone — build an image, push it to the local registry, then
+// announce it on Kafka.
 //
-// The stage runs on a small image that already has the Kafka client
-// (localhost:5001/kafka-python — built from the Dockerfile here and pushed to
-// your local registry), joined to the Kafka network so it can reach the broker
-// by name (week9-kafka:29092, the INTERNAL listener in docker-compose.yml).
+// The registry (localhost:5001) is plain HTTP with no auth, so the push needs
+// NO certificates and NO `docker login` — Docker treats localhost registries as
+// insecure by default. That's the simpler version of the earlier TLS + htpasswd
+// setup.
+//
+// The pipeline runs on the Jenkins node (which has the docker CLI + the mounted
+// Docker socket). The Kafka publish runs inside the kafka-python image, on the
+// Kafka network, so it can reach the broker by name (week9-kafka:29092).
 pipeline {
-    agent {
-        docker {
-            image 'localhost:5001/kafka-python:1'
-            args '--network week9_default'
-        }
-    }
+    agent any
     environment {
-        BROKER = 'week9-kafka:29092'
-        TOPIC  = 'ci.images'
+        REGISTRY = 'localhost:5001'
+        IMAGE    = 'calculator'
+        TAG      = "${BUILD_NUMBER}"
+        TOPIC    = 'ci.images'
+        BROKER   = 'week9-kafka:29092'
     }
     stages {
-        stage('Build') {
+        stage('Build & push image') {
             steps {
-                echo 'build + push the image here, as in earlier weeks'
+                sh '''
+                    docker build -t ${REGISTRY}/${IMAGE}:${TAG} week9/app
+                    docker push ${REGISTRY}/${IMAGE}:${TAG}
+                '''
             }
         }
         stage('Announce to Kafka') {
             steps {
-                sh '''python - <<'PY'
-import json, os
-from kafka import KafkaProducer
-
-producer = KafkaProducer(
-    bootstrap_servers=os.environ["BROKER"],
-    value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-)
-event = {
-    "event": "ImagePushed",
-    "image": "calculator",
-    "tag": os.environ.get("BUILD_NUMBER", "0"),
-    "branch": os.environ.get("BRANCH_NAME", "main"),
-}
-producer.send(os.environ["TOPIC"], event).get(timeout=10)
-producer.flush()
-print("announced to Kafka:", event)
-PY'''
+                sh 'docker run --rm -i --network week9_default -e BROKER=${BROKER} -e TOPIC=${TOPIC} -e TAG=${TAG} -e BRANCH=${BRANCH_NAME:-main} localhost:5001/kafka-python:1 python - < week9/publish_event.py'
             }
         }
     }

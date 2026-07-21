@@ -14,8 +14,10 @@ Two things this week:
 | `requirements.txt` | Kafka Python client (`kafka-python-ng`) |
 | `producer.py` | publish messages keyed by `order_id` across a 3-partition `orders` topic |
 | `consumer_group.py` | a consumer in group `orders-workers`; run two to split partitions |
-| `Jenkinsfile` | capstone: an **"Announce to Kafka"** stage that publishes `ImagePushed` |
-| `Dockerfile` | capstone: builds a small agent image (Python + Kafka client) for the pipeline |
+| `Jenkinsfile` | capstone: **build image → push to registry → announce `ImagePushed`** |
+| `Dockerfile` | capstone: builds the small agent image (Python + Kafka client) for the pipeline |
+| `app/Dockerfile` | capstone: the trivial image the pipeline builds and pushes |
+| `publish_event.py` | capstone: publishes the `ImagePushed` event (run inside the agent image) |
 
 ---
 
@@ -57,25 +59,29 @@ Tear down: `docker compose -p week9 down`.
 
 ## Capstone — the pipeline announces its build to Kafka
 
-The `Jenkinsfile` adds an **"Announce to Kafka"** stage that, after a build,
-publishes one `ImagePushed` event to the `ci.images` topic with a small Python
-producer. Nothing consumes the event yet — that comes in later weeks.
+The `Jenkinsfile` does three things: **builds an image, pushes it to the local
+registry, then announces it on Kafka** — the CI-to-events bridge in miniature.
+Nothing consumes the event yet; that comes in later weeks.
 
-**1. Build the agent image once** (Python + the Kafka client) and push it to your
-local registry — the same registry your pipeline publishes images to:
+1. **Build & push** — `docker build` the trivial `app/` image and `docker push` it
+   to `localhost:5001/calculator:${BUILD_NUMBER}`. Because the registry is plain
+   HTTP with no auth, this needs **no certificates and no `docker login`** (Docker
+   treats `localhost` registries as insecure) — simpler than the earlier
+   TLS + htpasswd setup.
+2. **Announce** — publish an `ImagePushed` event (carrying that tag) to the
+   `ci.images` topic.
+
+**Prereq — build the agent image once** (Python + the Kafka client) and push it to
+the same registry; the announce step runs inside it:
 
 ```bash
 docker build -t localhost:5001/kafka-python:1 .
 docker push  localhost:5001/kafka-python:1
 ```
 
-**2. The pipeline runs its publish step on that image**, joined to the Kafka
-network so it can reach the broker by name (see `Jenkinsfile`):
-
-```groovy
-agent { docker { image 'localhost:5001/kafka-python:1'; args '--network week9_default' } }
-environment { BROKER = 'week9-kafka:29092'; TOPIC = 'ci.images' }
-```
+The pipeline runs on the Jenkins node (docker CLI + mounted socket); the announce
+step does `docker run --network week9_default localhost:5001/kafka-python:1 …` so
+it can reach the broker by name (`week9-kafka:29092`).
 
 **Why the broker has two listeners** (`docker-compose.yml`): it advertises
 `localhost:9092` for clients on the host (the lab) and `week9-kafka:29092` for
@@ -90,7 +96,13 @@ docker exec week9-kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092
 ```
 
-> **Validated** on macOS (Docker + Apache Kafka 3.9.0): the lab's keyed production
-> pins each `order_id` to one partition and a two-member group splits/rebalances
-> correctly; and a container running the `kafka-python` image publishes
-> `ImagePushed` to `week9-kafka:29092`, which reads back cleanly from `ci.images`.
+And confirm the image was pushed:
+```bash
+curl localhost:5001/v2/_catalog
+curl localhost:5001/v2/calculator/tags/list
+```
+
+> **Validated** in real Jenkins (Docker Pipeline plugin, Kafka 3.9.0): the job
+> builds `calculator`, pushes it to `localhost:5001`, and announces `ImagePushed`
+> (with the build number as the tag) to `ci.images` — read back cleanly. The lab's
+> keyed production + two-member group split/rebalance also verified.
